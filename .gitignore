@@ -1,0 +1,36 @@
+# Node modules
+node_modules/
+**/node_modules/
+
+# Environment files
+.env
+**/.env
+
+# IDE / OS files
+.DS_Store
+.vscode/
+.idea/
+
+# Backend specific
+backend/npm-debug.log
+
+# Frontend specific (copied from frontend/.gitignore)
+frontend/build/
+frontend/local.properties
+frontend/*.keystore
+!frontend/debug.keystore
+frontend/.kotlin/
+frontend/npm-debug.log
+frontend/yarn-error.log
+frontend/.metro-health-check*
+frontend/coverage/
+frontend/.yarn/*
+!frontend/.yarn/patches
+!frontend/.yarn/plugins
+!frontend/.yarn/releases
+!frontend/.yarn/sdks
+!frontend/.yarn/versions
+frontend/android/build/
+frontend/ios/build/
+frontend/vendor/bundle/
+frontend/Pods/
