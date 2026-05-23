@@ -12,7 +12,11 @@ const invoiceSchema = new mongoose.Schema({
   taxAmount: { type: Number, required: true },
   grandTotal: { type: Number, required: true },
   paymentMethod: { type: String, required: true },
-  status: { type: String, enum: ['Paid', 'Pending', 'Cancelled'], default: 'Pending' }
+  status: { type: String, enum: ['Paid', 'Pending', 'Cancelled'], default: 'Pending' },
+  invoiceType: { type: String, default: 'Cash Bill' },
+  customerName: { type: String, default: 'Walk-in Customer' },
+  customerPhone: { type: String, default: '' },
+  discountAmount: { type: Number, default: 0 }
 }, { timestamps: true });
 
 module.exports = mongoose.model('Invoice', invoiceSchema);
