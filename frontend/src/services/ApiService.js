@@ -2,7 +2,7 @@ import axios from 'axios';
 
 // Replace with your local machine IP address for physical device testing
 // 10.0.2.2 is the default for Android Emulator to access localhost
-const API_URL = 'http://10.0.2.2:5000/api'; 
+const API_URL = 'http://192.168.1.4:5000/api'; 
 
 const api = axios.create({
   baseURL: API_URL,

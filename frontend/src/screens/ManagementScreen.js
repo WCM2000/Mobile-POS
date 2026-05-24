@@ -11,10 +11,13 @@ import {
   ActivityIndicator,
   Alert,
   ScrollView,
+  Dimensions,
 } from 'react-native';
 import { useSelector } from 'react-redux';
 import ApiService from '../services/ApiService';
 import { COLORS, SHADOWS } from '../utils/styles';
+
+const { width } = Dimensions.get('window');
 
 const ManagementScreen = () => {
   const settings = useSelector((state) => state.settings);
