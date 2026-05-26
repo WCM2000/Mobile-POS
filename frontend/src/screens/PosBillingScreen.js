@@ -16,8 +16,8 @@ import {
 import { useSelector, useDispatch } from 'react-redux';
 import { addToCart, removeFromCart, updateQuantity, applyCartConfig, clearCart } from '../redux/cartSlice';
 import PrinterService from '../services/PrinterService';
-import ApiService from '../services/ApiService';
 import { COLORS, SHADOWS } from '../utils/styles';
+import { getProductsLocal, getDb, addInvoiceLocal } from '../services/LocalDbService';
 
 const { width, height } = Dimensions.get('window');
 const isTablet = width > 768;
@@ -65,9 +65,12 @@ const PosBillingScreen = () => {
   const fetchData = async () => {
     try {
       setLoading(true);
+      const db = getDb();
+      if (!db) return;
+
       const [prods, custs] = await Promise.all([
-        ApiService.getProducts(),
-        ApiService.getCustomers(),
+        getProductsLocal(),
+        db.getAllAsync('SELECT * FROM customers'),
       ]);
       setProducts(prods);
       setCustomers(custs);
@@ -95,13 +98,18 @@ const PosBillingScreen = () => {
     }
     try {
       setAddCustomerLoading(true);
-      const newCust = await ApiService.createCustomer({
-        name: newCustomerName,
-        phone: newCustomerPhone,
-        outstandingBalance: invoiceType === 'Open Invoice' ? grandTotal : 0,
-      });
-      setCustomers([...customers, newCust]);
+      const db = getDb();
+      await db.runAsync(
+        'INSERT INTO customers (name, phone) VALUES (?, ?)',
+        [newCustomerName, newCustomerPhone]
+      );
+      
+      const updatedCusts = await db.getAllAsync('SELECT * FROM customers');
+      setCustomers(updatedCusts);
+      
+      const newCust = updatedCusts.find(c => c.phone === newCustomerPhone);
       setSelectedCustomer(newCust);
+      
       setNewCustomerName('');
       setNewCustomerPhone('');
       setCustomerModalVisible(false);
@@ -129,80 +137,36 @@ const PosBillingScreen = () => {
 
       const invoiceNum = `INV-${Date.now().toString().slice(-6)}`;
 
-      // 1. Compile Invoice Payload
-      const invoiceData = {
-        invoiceNumber: invoiceNum,
-        items: items.map(item => ({
-          productId: item._id || item.id,
+      // 1. Save to Local Database
+      await addInvoiceLocal(
+        selectedCustomer ? selectedCustomer.name : 'Walk-in Customer',
+        grandTotal,
+        discountAmount,
+        items.map(item => ({
+          id: item.id,
           name: item.name,
           quantity: item.quantity,
           price: item.price,
-        })),
-        subTotal,
-        taxAmount,
-        grandTotal,
-        paymentMethod: invoiceType === 'Open Invoice' ? 'Credit' : 'Cash',
-        status: invoiceType === 'Open Invoice' ? 'Pending' : 'Paid',
-        invoiceType,
-        customerName: selectedCustomer ? selectedCustomer.name : 'Walk-in Customer',
-        customerPhone: selectedCustomer ? selectedCustomer.phone : '',
-        discountAmount,
-      };
+        }))
+      );
 
-      // 2. Save to Backend Database
-      await ApiService.saveInvoice(invoiceData);
-
-      // If Open Invoice, update outstanding customer balance on backend
-      if (invoiceType === 'Open Invoice' && selectedCustomer) {
-        const updatedBalance = (selectedCustomer.outstandingBalance || 0) + grandTotal;
-        await ApiService.updateCustomer(selectedCustomer._id, {
-          outstandingBalance: updatedBalance,
-        });
-        // refresh local customer records
-        const custs = await ApiService.getCustomers();
-        setCustomers(custs);
-      }
+      // 2. Update stock levels in local DB
+      const db = getDb();
+      await db.withTransactionAsync(async () => {
+        for (const item of items) {
+          await db.runAsync(
+            'UPDATE products SET stock = stock - ? WHERE id = ?',
+            [item.quantity, item.id]
+          );
+        }
+      });
 
       // 3. Print Thermal Receipt
       try {
-        let receiptText = '';
-        const widthChars = settings.printerSize === '80mm' ? 40 : 30;
-        const separator = '-'.repeat(widthChars) + '\n';
-        
-        receiptText += `<C><B>${settings.shopName.toUpperCase()}</B></C>\n`;
-        receiptText += `<C>${settings.shopAddress}</C>\n`;
-        receiptText += `<C>Tel: ${settings.shopPhone}</C>\n`;
-        if (settings.shopGstNumber) {
-          receiptText += `<C>Tax Reg: ${settings.shopGstNumber}</C>\n`;
-        }
-        receiptText += separator;
-        receiptText += `<L>Date: ${new Date().toLocaleDateString()}</L> <R>${invoiceType.toUpperCase()}</R>\n`;
-        receiptText += `<L>No: ${invoiceNum}</L>\n`;
-        receiptText += `<L>Cust: ${selectedCustomer ? selectedCustomer.name : 'Walk-in'}</L>\n`;
-        receiptText += separator;
-        
-        // Print items line by line
-        items.forEach(item => {
-          const itemTotal = (item.price * item.quantity).toFixed(2);
-          receiptText += `<L>${item.name}</L>\n`;
-          receiptText += `<L>  ${item.quantity} x ${settings.currency}${item.price.toFixed(2)}</L><R>${settings.currency}${itemTotal}</R>\n`;
-        });
-        
-        receiptText += separator;
-        receiptText += `<R>Subtotal: ${settings.currency}${subTotal.toFixed(2)}</R>\n`;
-        if (discountAmount > 0) {
-          receiptText += `<R>Discount: -${settings.currency}${discountAmount.toFixed(2)}</R>\n`;
-        }
-        receiptText += `<R>${settings.taxType} (${settings.taxRate}%): ${settings.currency}${taxAmount.toFixed(2)}</R>\n`;
-        receiptText += `<R><B>GRAND TOTAL: ${settings.currency}${grandTotal.toFixed(2)}</B></R>\n`;
-        receiptText += separator;
-        receiptText += `<C>Thank You! Please Come Again</C>\n`;
-        receiptText += `<C>Power by O3 POS</C>\n\n\n\n`;
-
         await PrinterService.printReceipt(items, subTotal, taxAmount, grandTotal);
       } catch (printError) {
         console.log('Printing error:', printError);
-        Alert.alert('Print Alert', 'Invoice saved to DB, but thermal printer did not reply.');
+        Alert.alert('Print Alert', 'Invoice saved locally, but thermal printer did not reply.');
       }
 
       Alert.alert('Success', `${invoiceType} finalized successfully!`);
@@ -287,28 +251,28 @@ const PosBillingScreen = () => {
           ) : (
             <FlatList
               data={filteredProducts}
-              keyExtractor={(item) => item._id}
+              keyExtractor={(item) => item.id.toString()}
               numColumns={isTablet ? 3 : 2}
               renderItem={({ item }) => {
-                const qtyInCart = getCartQuantity(item._id);
+                const qtyInCart = getCartQuantity(item.id);
                 return (
                   <View style={[styles.productCard, qtyInCart > 0 && styles.activeProductCard]}>
                     <Text style={styles.prodName} numberOfLines={2}>{item.name}</Text>
                     <Text style={styles.prodPrice}>{settings.currency}{item.price.toFixed(2)}</Text>
-                    <Text style={styles.prodStock}>Stock: {item.stockQuantity}</Text>
+                    <Text style={styles.prodStock}>Stock: {item.stock}</Text>
                     
                     {qtyInCart > 0 ? (
                       <View style={styles.counterRow}>
                         <TouchableOpacity
                           style={styles.counterBtn}
-                          onPress={() => dispatch(updateQuantity({ id: item._id, quantity: qtyInCart - 1 }))}
+                          onPress={() => dispatch(updateQuantity({ id: item.id, quantity: qtyInCart - 1 }))}
                         >
                           <Text style={styles.counterBtnText}>-</Text>
                         </TouchableOpacity>
                         <Text style={styles.counterValue}>{qtyInCart}</Text>
                         <TouchableOpacity
                           style={styles.counterBtn}
-                          onPress={() => dispatch(addToCart({ ...item, id: item._id }))}
+                          onPress={() => dispatch(addToCart({ ...item, id: item.id }))}
                         >
                           <Text style={styles.counterBtnText}>+</Text>
                         </TouchableOpacity>
@@ -316,7 +280,7 @@ const PosBillingScreen = () => {
                     ) : (
                       <TouchableOpacity
                         style={styles.addBtn}
-                        onPress={() => dispatch(addToCart({ ...item, id: item._id }))}
+                        onPress={() => dispatch(addToCart({ ...item, id: item.id }))}
                       >
                         <Text style={styles.addBtnText}>ADD TO BILL</Text>
                       </TouchableOpacity>
@@ -330,7 +294,7 @@ const PosBillingScreen = () => {
                   <Text style={styles.emptySubText}>Add products in the Item Management tab.</Text>
                 </View>
               }
-              contentContainerStyle={{ paddingBottom: 50 }}
+              contentContainerStyle={{ paddingBottom: 100 }}
             />
           )}
         </View>
@@ -341,8 +305,9 @@ const PosBillingScreen = () => {
           
           <FlatList
             data={items}
-            keyExtractor={(item) => item.id}
+            keyExtractor={(item) => item.id.toString()}
             style={styles.cartList}
+            contentContainerStyle={{ paddingBottom: 20 }}
             renderItem={({ item }) => (
               <View style={styles.cartItemRow}>
                 <View style={{ flex: 1 }}>
@@ -463,8 +428,8 @@ const PosBillingScreen = () => {
 
               {customers.map((c) => (
                 <TouchableOpacity
-                  key={c._id}
-                  style={[styles.customerItem, selectedCustomer?._id === c._id && styles.activeCustomerItem]}
+                  key={c.id.toString()}
+                  style={[styles.customerItem, selectedCustomer?.id === c.id && styles.activeCustomerItem]}
                   onPress={() => {
                     setSelectedCustomer(c);
                     setCustomerModalVisible(false);
@@ -472,7 +437,7 @@ const PosBillingScreen = () => {
                 >
                   <Text style={styles.customerItemName}>👤 {c.name}</Text>
                   <Text style={styles.customerItemPhone}>
-                    📞 {c.phone} | Ledger: {settings.currency}{(c.outstandingBalance || 0).toFixed(2)}
+                    📞 {c.phone}
                   </Text>
                 </TouchableOpacity>
               ))}

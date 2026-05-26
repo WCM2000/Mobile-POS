@@ -1,5 +1,6 @@
 import React from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
 import PosBillingScreen from '../screens/PosBillingScreen';
 import ManagementScreen from '../screens/ManagementScreen';
 import ReportsScreen from '../screens/ReportsScreen';
@@ -16,14 +17,14 @@ const TabNavigator = () => {
           backgroundColor: '#0F172A', // Premium Slate 900
           borderTopWidth: 1.5,
           borderColor: '#1E293B',
-          height: 64,
+          height: 65,
           paddingBottom: 10,
           paddingTop: 8,
         },
         tabBarActiveTintColor: '#0EA5E9', // Ocean Blue
         tabBarInactiveTintColor: '#94A3B8', // Slate 400
         tabBarLabelStyle: {
-          fontSize: 11,
+          fontSize: 10,
           fontWeight: '800',
         },
         headerStyle: {
@@ -46,6 +47,9 @@ const TabNavigator = () => {
         options={{
           title: '💵 Cashier Terminal',
           tabBarLabel: 'Cashier POS',
+          tabBarIcon: ({ color, size }) => (
+            <MaterialCommunityIcons name="cash-register" color={color} size={size} />
+          ),
         }}
       />
       <Tab.Screen 
@@ -54,6 +58,9 @@ const TabNavigator = () => {
         options={{
           title: '📦 O3 Core Registries',
           tabBarLabel: 'Management',
+          tabBarIcon: ({ color, size }) => (
+            <MaterialCommunityIcons name="package-variant-closed" color={color} size={size} />
+          ),
         }}
       />
       <Tab.Screen 
@@ -62,6 +69,9 @@ const TabNavigator = () => {
         options={{
           title: '📈 Sales & Ledgers',
           tabBarLabel: 'Reports',
+          tabBarIcon: ({ color, size }) => (
+            <MaterialCommunityIcons name="chart-areaspline" color={color} size={size} />
+          ),
         }}
       />
       <Tab.Screen 
@@ -70,6 +80,9 @@ const TabNavigator = () => {
         options={{
           title: '⚙️ Shop Configuration',
           tabBarLabel: 'Settings',
+          tabBarIcon: ({ color, size }) => (
+            <MaterialCommunityIcons name="cog" color={color} size={size} />
+          ),
         }}
       />
     </Tab.Navigator>

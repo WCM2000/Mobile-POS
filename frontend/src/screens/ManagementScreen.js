@@ -14,7 +14,7 @@ import {
   Dimensions,
 } from 'react-native';
 import { useSelector } from 'react-redux';
-import ApiService from '../services/ApiService';
+import { getDb, getProductsLocal, addProductLocal } from '../services/LocalDbService';
 import { COLORS, SHADOWS } from '../utils/styles';
 
 const { width } = Dimensions.get('window');
@@ -41,12 +41,10 @@ const ManagementScreen = () => {
   const [prodName, setProdName] = useState('');
   const [prodPrice, setProdPrice] = useState('');
   const [prodStock, setProdStock] = useState('');
-  const [prodTax, setProdTax] = useState('');
 
   // Form Fields - Customer
   const [custName, setCustName] = useState('');
   const [custPhone, setCustPhone] = useState('');
-  const [custBalance, setCustBalance] = useState('');
 
   useEffect(() => {
     fetchData();
@@ -55,15 +53,18 @@ const ManagementScreen = () => {
   const fetchData = async () => {
     try {
       setLoading(true);
+      const db = getDb();
+      if (!db) return;
+
       const [prods, custs] = await Promise.all([
-        ApiService.getProducts(),
-        ApiService.getCustomers(),
+        getProductsLocal(),
+        db.getAllAsync('SELECT * FROM customers'),
       ]);
       setProducts(prods);
       setCustomers(custs);
     } catch (error) {
       console.log('Error fetching management data:', error);
-      Alert.alert('Load Error', 'Failed to retrieve information from the server.');
+      Alert.alert('Load Error', 'Failed to retrieve local registry records.');
     } finally {
       setLoading(false);
     }
@@ -75,7 +76,6 @@ const ManagementScreen = () => {
     setProdName('');
     setProdPrice('');
     setProdStock('10');
-    setProdTax(settings.taxRate.toString());
     setItemModalVisible(true);
   };
 
@@ -83,8 +83,7 @@ const ManagementScreen = () => {
     setEditingItem(item);
     setProdName(item.name);
     setProdPrice(item.price.toString());
-    setProdStock(item.stockQuantity.toString());
-    setProdTax((item.taxRate || settings.taxRate).toString());
+    setProdStock(item.stock.toString());
     setItemModalVisible(true);
   };
 
@@ -94,22 +93,17 @@ const ManagementScreen = () => {
       return;
     }
 
-    const payload = {
-      name: prodName,
-      price: parseFloat(prodPrice) || 0,
-      stockQuantity: parseInt(prodStock) || 0,
-      taxRate: parseFloat(prodTax) || 0,
-    };
-
     try {
       setLoading(true);
+      const db = getDb();
       if (editingItem) {
-        // Update
-        await ApiService.updateProduct(editingItem._id, payload);
+        await db.runAsync(
+          'UPDATE products SET name = ?, price = ?, stock = ?, category = ? WHERE id = ?',
+          [prodName, parseFloat(prodPrice), parseInt(prodStock), '', editingItem.id]
+        );
         Alert.alert('Success', 'Product updated successfully.');
       } else {
-        // Create
-        await ApiService.createProduct(payload);
+        await addProductLocal(prodName, parseFloat(prodPrice), parseInt(prodStock));
         Alert.alert('Success', 'Product created successfully.');
       }
       setItemModalVisible(false);
@@ -133,7 +127,8 @@ const ManagementScreen = () => {
           onPress: async () => {
             try {
               setLoading(true);
-              await ApiService.deleteProduct(id);
+              const db = getDb();
+              await db.runAsync('DELETE FROM products WHERE id = ?', [id]);
               Alert.alert('Deleted', 'Product removed.');
               fetchData();
             } catch (err) {
@@ -152,7 +147,6 @@ const ManagementScreen = () => {
     setEditingCustomer(null);
     setCustName('');
     setCustPhone('');
-    setCustBalance('0');
     setCustomerModalVisible(true);
   };
 
@@ -160,7 +154,6 @@ const ManagementScreen = () => {
     setEditingCustomer(cust);
     setCustName(cust.name);
     setCustPhone(cust.phone);
-    setCustBalance((cust.outstandingBalance || 0).toString());
     setCustomerModalVisible(true);
   };
 
@@ -170,21 +163,20 @@ const ManagementScreen = () => {
       return;
     }
 
-    const payload = {
-      name: custName,
-      phone: custPhone,
-      outstandingBalance: parseFloat(custBalance) || 0,
-    };
-
     try {
       setLoading(true);
+      const db = getDb();
       if (editingCustomer) {
-        // Update
-        await ApiService.updateCustomer(editingCustomer._id, payload);
+        await db.runAsync(
+          'UPDATE customers SET name = ?, phone = ? WHERE id = ?',
+          [custName, custPhone, editingCustomer.id]
+        );
         Alert.alert('Success', 'Customer profile updated.');
       } else {
-        // Create
-        await ApiService.createCustomer(payload);
+        await db.runAsync(
+          'INSERT INTO customers (name, phone) VALUES (?, ?)',
+          [custName, custPhone]
+        );
         Alert.alert('Success', 'Customer registered successfully.');
       }
       setCustomerModalVisible(false);
@@ -199,7 +191,7 @@ const ManagementScreen = () => {
   const handleDeleteCustomer = (id, name) => {
     Alert.alert(
       'Remove Customer',
-      `Delete customer account "${name}"? This deletes all associated outstanding ledger reference tags.`,
+      `Delete customer account "${name}"?`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -208,7 +200,8 @@ const ManagementScreen = () => {
           onPress: async () => {
             try {
               setLoading(true);
-              await ApiService.deleteCustomer(id);
+              const db = getDb();
+              await db.runAsync('DELETE FROM customers WHERE id = ?', [id]);
               Alert.alert('Removed', 'Customer deleted.');
               fetchData();
             } catch (err) {
@@ -293,9 +286,9 @@ const ManagementScreen = () => {
         /* Inventory List */
         <FlatList
           data={filteredProducts}
-          keyExtractor={(item) => item._id}
+          keyExtractor={(item) => item.id.toString()}
           renderItem={({ item }) => {
-            const isOutOfStock = item.stockQuantity <= 0;
+            const isOutOfStock = item.stock <= 0;
             return (
               <View style={styles.itemCard}>
                 <View style={styles.cardInfoCol}>
@@ -316,9 +309,10 @@ const ManagementScreen = () => {
                           isOutOfStock ? { color: COLORS.danger } : { color: COLORS.primaryDark },
                         ]}
                       >
-                        {isOutOfStock ? 'Out of Stock' : `Qty: ${item.stockQuantity}`}
+                        {isOutOfStock ? 'Out of Stock' : `Qty: ${item.stock}`}
                       </Text>
                     </View>
+
                   </View>
                 </View>
 
@@ -332,7 +326,7 @@ const ManagementScreen = () => {
                   </TouchableOpacity>
                   <TouchableOpacity
                     style={styles.actionDeleteBtn}
-                    onPress={() => handleDeleteProduct(item._id, item.name)}
+                    onPress={() => handleDeleteProduct(item.id, item.name)}
                   >
                     <Text style={styles.actionDeleteText}>Delete</Text>
                   </TouchableOpacity>
@@ -348,26 +342,19 @@ const ManagementScreen = () => {
           }
           refreshing={loading}
           onRefresh={fetchData}
-          contentContainerStyle={{ paddingBottom: 50 }}
+          contentContainerStyle={{ paddingBottom: 100 }}
         />
       ) : (
         /* Customers List */
         <FlatList
           data={filteredCustomers}
-          keyExtractor={(item) => item._id}
+          keyExtractor={(item) => item.id.toString()}
           renderItem={({ item }) => {
-            const hasOutstanding = item.outstandingBalance > 0;
             return (
               <View style={styles.itemCard}>
                 <View style={styles.cardInfoCol}>
                   <Text style={styles.cardName}>👤 {item.name}</Text>
                   <Text style={styles.custPhone}>📞 {item.phone}</Text>
-                  <View style={styles.metaRow}>
-                    <Text style={styles.ledgerLabel}>Credit Balance:</Text>
-                    <Text style={[styles.ledgerValue, hasOutstanding ? { color: COLORS.danger } : { color: COLORS.success }]}>
-                      {settings.currency}{(item.outstandingBalance || 0).toFixed(2)}
-                    </Text>
-                  </View>
                 </View>
 
                 {/* CRUD Action Buttons */}
@@ -380,7 +367,7 @@ const ManagementScreen = () => {
                   </TouchableOpacity>
                   <TouchableOpacity
                     style={styles.actionDeleteBtn}
-                    onPress={() => handleDeleteCustomer(item._id, item.name)}
+                    onPress={() => handleDeleteCustomer(item.id, item.name)}
                   >
                     <Text style={styles.actionDeleteText}>Delete</Text>
                   </TouchableOpacity>
@@ -391,12 +378,12 @@ const ManagementScreen = () => {
           ListEmptyComponent={
             <View style={styles.emptyContainer}>
               <Text style={styles.emptyText}>No customers registered.</Text>
-              <Text style={styles.emptySubText}>Create accounts to track Open Invoice credit ledgers.</Text>
+              <Text style={styles.emptySubText}>Create customer profiles here.</Text>
             </View>
           }
           refreshing={loading}
           onRefresh={fetchData}
-          contentContainerStyle={{ paddingBottom: 50 }}
+          contentContainerStyle={{ paddingBottom: 100 }}
         />
       )}
 
@@ -454,18 +441,6 @@ const ManagementScreen = () => {
                 />
               </View>
 
-              <View style={styles.modalInputGroup}>
-                <Text style={styles.modalLabel}>GST / Tax Rate (%)</Text>
-                <TextInput
-                  style={styles.modalInput}
-                  placeholder="e.g. 8"
-                  placeholderTextColor={COLORS.textMuted}
-                  keyboardType="numeric"
-                  value={prodTax}
-                  onChangeText={setProdTax}
-                />
-              </View>
-
               <TouchableOpacity style={styles.modalSaveBtn} onPress={handleSaveProduct}>
                 <Text style={styles.modalSaveBtnText}>💾 Commit Product details</Text>
               </TouchableOpacity>
@@ -513,18 +488,6 @@ const ManagementScreen = () => {
                   keyboardType="phone-pad"
                   value={custPhone}
                   onChangeText={setCustPhone}
-                />
-              </View>
-
-              <View style={styles.modalInputGroup}>
-                <Text style={styles.modalLabel}>Credit Ledger Balance ({settings.currency})</Text>
-                <TextInput
-                  style={styles.modalInput}
-                  placeholder="e.g. 0"
-                  placeholderTextColor={COLORS.textMuted}
-                  keyboardType="numeric"
-                  value={custBalance}
-                  onChangeText={setCustBalance}
                 />
               </View>
 
