@@ -17,6 +17,7 @@ import { useSelector, useDispatch } from 'react-redux';
 import { updateSettings } from '../redux/settingsSlice';
 import PrinterService from '../services/PrinterService';
 import { COLORS, SHADOWS } from '../utils/styles';
+import { exportDataAsJson, pickAndImportFile } from '../services/DataShareService';
 
 const SettingsScreen = () => {
   const dispatch = useDispatch();
@@ -31,6 +32,9 @@ const SettingsScreen = () => {
   const [taxInclusive, setTaxInclusive] = useState(settings.taxInclusive);
   const [taxType, setTaxType] = useState(settings.taxType); // GST, SST, VAT, None
   const [currency, setCurrency] = useState(settings.currency);
+
+  // Export Date State
+  const [exportDate, setExportDate] = useState(new Date().toISOString().split('T')[0]);
 
   // Printer Scanning
   const [scanning, setScanning] = useState(false);
@@ -52,6 +56,14 @@ const SettingsScreen = () => {
       })
     );
     Alert.alert('Success', 'Shop configurations saved locally and synchronized!');
+  };
+
+  const handleExport = async () => {
+    await exportDataAsJson(exportDate);
+  };
+
+  const handleImport = async () => {
+    await pickAndImportFile();
   };
 
   // Android BLE Permissions check at runtime (Android 12+)
@@ -156,6 +168,32 @@ const SettingsScreen = () => {
       <ScrollView contentContainerStyle={styles.scrollContainer}>
         <Text style={styles.pageTitle}>System Settings</Text>
         <Text style={styles.pageSubtitle}>Configure printing terminals, tax, and branding profile</Text>
+
+        {/* Backup & Restore Card */}
+        <View style={styles.card}>
+          <Text style={styles.cardHeader}>📂 Backup & Restore (Offline Share)</Text>
+          <View style={styles.inputGroup}>
+            <Text style={styles.label}>Export Date (YYYY-MM-DD)</Text>
+            <TextInput
+              style={styles.input}
+              value={exportDate}
+              onChangeText={setExportDate}
+              placeholder="e.g. 2026-05-27"
+              placeholderTextColor={COLORS.textMuted}
+            />
+          </View>
+          <View style={styles.rowBetween}>
+            <TouchableOpacity style={[styles.actionBtn, { backgroundColor: COLORS.primary }]} onPress={handleExport}>
+              <Text style={styles.actionBtnText}>📤 Export Data</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.actionBtn, { backgroundColor: COLORS.success }]} onPress={handleImport}>
+              <Text style={styles.actionBtnText}>📥 Import Data</Text>
+            </TouchableOpacity>
+          </View>
+          <Text style={styles.toggleDesc}>
+            Exported JSON files can be shared via WhatsApp/Bluetooth and imported on another device.
+          </Text>
+        </View>
 
         {/* Shop Info Card */}
         <View style={styles.card}>
@@ -470,6 +508,18 @@ const styles = StyleSheet.create({
     color: COLORS.textMuted,
     marginTop: 2,
     lineHeight: 14,
+  },
+  actionBtn: {
+    flex: 0.48,
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: 'center',
+    ...SHADOWS.small,
+  },
+  actionBtnText: {
+    color: COLORS.textWhite,
+    fontWeight: '800',
+    fontSize: 13,
   },
   saveBtn: {
     backgroundColor: COLORS.darkBg,
