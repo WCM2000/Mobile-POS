@@ -12,6 +12,9 @@ const initialState = {
   printerSize: '80mm', // 58mm or 80mm
   connectedPrinterAddress: '',
   connectedPrinterName: 'Not Connected',
+  showDiscountOnInvoice: true,
+  listProductsSeparately: false,
+  showCustomerDetailsOnInvoice: true,
 };
 
 const settingsSlice = createSlice({

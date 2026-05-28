@@ -12,6 +12,8 @@ import {
   Alert,
   TextInput,
   Platform,
+  Modal,
+  ScrollView,
 } from 'react-native';
 import { useSelector } from 'react-redux';
 import { getDb } from '../services/LocalDbService';
@@ -30,6 +32,11 @@ const ReportsScreen = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState('All'); // All, Cash Bill, Open Invoice
   const [selectedInvoice, setSelectedInvoice] = useState(null);
+
+  // Preview Modal States
+  const [previewModalVisible, setPreviewModalVisible] = useState(false);
+  const [previewText, setPreviewText] = useState('');
+  const [currentInvoiceData, setCurrentInvoiceData] = useState(null);
 
   useEffect(() => {
     fetchInvoices();
@@ -52,7 +59,7 @@ const ReportsScreen = () => {
         grandTotal: inv.total_amount,
         taxAmount: (inv.total_amount * settings.taxRate) / (100 + settings.taxRate), // rough estimate if not stored
         customerName: inv.customer_name,
-        invoiceType: 'Cash Bill', // Default or add a column if needed
+        invoiceType: inv.invoice_type || 'Cash Bill',
         status: 'Paid',
       }));
 
@@ -138,15 +145,53 @@ const ReportsScreen = () => {
 
   const handleReprintReceipt = async (inv) => {
     try {
-      Alert.alert('Reprinting', `Resending Invoice ${inv.invoiceNumber} to Bluetooth Printer...`);
-      await PrinterService.printReceipt(
+      const subTotal = inv.total_amount - inv.taxAmount;
+      const rawReceiptText = PrinterService.generateReceiptText(
         inv.items,
-        inv.total_amount - inv.taxAmount,
+        subTotal,
         inv.taxAmount,
-        inv.total_amount
+        inv.total_amount,
+        inv.discount || 0,
+        settings
       );
+      const cleanPreviewText = PrinterService.stripPrintTags(rawReceiptText);
+
+      setCurrentInvoiceData({
+        items: inv.items,
+        subTotal,
+        taxAmount: inv.taxAmount,
+        grandTotal: inv.total_amount,
+        discountAmount: inv.discount || 0,
+      });
+      setPreviewText(cleanPreviewText);
+      setPreviewModalVisible(true);
     } catch (err) {
-      Alert.alert('Print Error', 'Thermal printer could not be reached.');
+      console.log('Reprint error:', err);
+      Alert.alert('Error', 'Could not generate receipt preview.');
+    }
+  };
+
+  const executeFinalReprint = async () => {
+    if (!currentInvoiceData) return;
+    
+    if (!settings.connectedPrinterAddress) {
+       Alert.alert('Printer Required', 'Please connect a printer in settings first.');
+       return;
+    }
+
+    try {
+      await PrinterService.printReceipt(
+        currentInvoiceData.items, 
+        currentInvoiceData.subTotal, 
+        currentInvoiceData.taxAmount, 
+        currentInvoiceData.grandTotal, 
+        currentInvoiceData.discountAmount
+      );
+      Alert.alert('Print Success', 'Receipt sent to printer.');
+      setPreviewModalVisible(false);
+    } catch (printError) {
+      console.log('Printing error:', printError);
+      Alert.alert('Print Failed', 'Could not reach thermal printer. Please verify connection.');
     }
   };
 
@@ -381,6 +426,45 @@ const ReportsScreen = () => {
           contentContainerStyle={{ paddingBottom: 100 }}
         />
       )}
+
+      {/* Invoice Reprint Preview Modal */}
+      <Modal
+        visible={previewModalVisible}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setPreviewModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>🧾 Receipt Preview</Text>
+              <TouchableOpacity onPress={() => setPreviewModalVisible(false)}>
+                <Text style={styles.modalCloseIcon}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={styles.previewScroll}>
+              <Text style={styles.previewTextContent}>{previewText}</Text>
+            </ScrollView>
+
+            <View style={styles.previewActionRow}>
+              <TouchableOpacity 
+                style={[styles.actionBtnCancel, { flex: 1, marginRight: 8, alignItems: 'center' }]} 
+                onPress={() => setPreviewModalVisible(false)}
+              >
+                <Text style={styles.actionText}>Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity 
+                style={[styles.actionBtnReprint, { flex: 1, marginLeft: 8, alignItems: 'center', backgroundColor: COLORS.success }]} 
+                onPress={executeFinalReprint}
+              >
+                <Text style={[styles.actionText, { color: COLORS.textWhite }]}>🖨 Print Receipt</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -648,6 +732,56 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: COLORS.textMuted,
     marginTop: 5,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: COLORS.overlay,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContent: {
+    backgroundColor: COLORS.lightCard,
+    borderRadius: 20,
+    padding: 24,
+    width: '90%',
+    maxHeight: '85%',
+    ...SHADOWS.large,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+    borderBottomWidth: 1,
+    borderColor: COLORS.borderLight,
+    paddingBottom: 12,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: COLORS.textDark,
+  },
+  modalCloseIcon: {
+    fontSize: 20,
+    color: COLORS.textMuted,
+    fontWeight: 'bold',
+  },
+  previewScroll: {
+    backgroundColor: '#F1F5F9',
+    borderRadius: 8,
+    padding: 16,
+    maxHeight: 400,
+    marginBottom: 16,
+  },
+  previewTextContent: {
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    fontSize: 12,
+    color: COLORS.textDark,
+    lineHeight: 18,
+  },
+  previewActionRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
   },
 });
 

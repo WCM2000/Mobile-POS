@@ -3,6 +3,7 @@ import { createSlice } from '@reduxjs/toolkit';
 const initialState = {
   items: [],
   subTotal: 0,
+  discountPercent: 0,
   discountAmount: 0,
   taxRate: 8,
   taxInclusive: false,
@@ -40,10 +41,10 @@ const cartSlice = createSlice({
       recalculate(state);
     },
     applyCartConfig: (state, action) => {
-      const { taxRate, taxInclusive, discountAmount } = action.payload;
+      const { taxRate, taxInclusive, discountPercent } = action.payload;
       if (taxRate !== undefined) state.taxRate = taxRate;
       if (taxInclusive !== undefined) state.taxInclusive = taxInclusive;
-      if (discountAmount !== undefined) state.discountAmount = discountAmount;
+      if (discountPercent !== undefined) state.discountPercent = discountPercent;
       recalculate(state);
     },
     clearCart: (state) => {
@@ -59,6 +60,7 @@ const cartSlice = createSlice({
 const recalculate = (state) => {
   state.subTotal = state.items.reduce((acc, item) => acc + item.price * item.quantity, 0);
   
+  state.discountAmount = (state.subTotal * state.discountPercent) / 100;
   const discountableSubtotal = Math.max(0, state.subTotal - state.discountAmount);
   
   if (state.taxInclusive) {

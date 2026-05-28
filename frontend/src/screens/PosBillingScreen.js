@@ -12,9 +12,12 @@ import {
   TextInput,
   Modal,
   ScrollView,
+  Platform,
+  PermissionsAndroid,
 } from 'react-native';
 import { useSelector, useDispatch } from 'react-redux';
 import { addToCart, removeFromCart, updateQuantity, applyCartConfig, clearCart } from '../redux/cartSlice';
+import { updateSettings } from '../redux/settingsSlice';
 import PrinterService from '../services/PrinterService';
 import { COLORS, SHADOWS } from '../utils/styles';
 import { getProductsLocal, getDb, addInvoiceLocal } from '../services/LocalDbService';
@@ -43,8 +46,23 @@ const PosBillingScreen = () => {
   
   // Modals
   const [customerModalVisible, setCustomerModalVisible] = useState(false);
+  const [checkoutModalVisible, setCheckoutModalVisible] = useState(false);
+  const [previewModalVisible, setPreviewModalVisible] = useState(false);
+  
+  // Preview State
+  const [previewText, setPreviewText] = useState('');
+  const [currentInvoiceData, setCurrentInvoiceData] = useState(null);
+
+  // Printer Scanning State
+  const [scanning, setScanning] = useState(false);
+  const [devices, setDevices] = useState([]);
+  const [showPrinterList, setShowPrinterList] = useState(false);
+
   const [newCustomerName, setNewCustomerName] = useState('');
   const [newCustomerPhone, setNewCustomerPhone] = useState('');
+  const [newCustomerEmail, setNewCustomerEmail] = useState('');
+  const [newCustomerAddress, setNewCustomerAddress] = useState('');
+  const [customerSearchQuery, setCustomerSearchQuery] = useState('');
   const [addCustomerLoading, setAddCustomerLoading] = useState(false);
 
   // Sync settings with cart slice config
@@ -83,12 +101,12 @@ const PosBillingScreen = () => {
   };
 
   const handleApplyDiscount = () => {
-    const discountVal = parseFloat(discountInput) || 0;
-    if (discountVal < 0 || discountVal > subTotal) {
-      Alert.alert('Invalid Discount', 'Discount amount must be between 0 and the subtotal.');
+    const discountPercent = parseFloat(discountInput) || 0;
+    if (discountPercent < 0 || discountPercent > 100) {
+      Alert.alert('Invalid Discount', 'Discount percentage must be between 0 and 100.');
       return;
     }
-    dispatch(applyCartConfig({ discountAmount: discountVal }));
+    dispatch(applyCartConfig({ discountPercent }));
   };
 
   const handleQuickAddCustomer = async () => {
@@ -100,8 +118,8 @@ const PosBillingScreen = () => {
       setAddCustomerLoading(true);
       const db = getDb();
       await db.runAsync(
-        'INSERT INTO customers (name, phone) VALUES (?, ?)',
-        [newCustomerName, newCustomerPhone]
+        'INSERT INTO customers (name, phone, email, address) VALUES (?, ?, ?, ?)',
+        [newCustomerName, newCustomerPhone, newCustomerEmail, newCustomerAddress]
       );
       
       const updatedCusts = await db.getAllAsync('SELECT * FROM customers');
@@ -112,6 +130,8 @@ const PosBillingScreen = () => {
       
       setNewCustomerName('');
       setNewCustomerPhone('');
+      setNewCustomerEmail('');
+      setNewCustomerAddress('');
       setCustomerModalVisible(false);
       Alert.alert('Success', 'Customer registered and selected!');
     } catch (error) {
@@ -121,7 +141,7 @@ const PosBillingScreen = () => {
     }
   };
 
-  const handleCheckout = async () => {
+  const handleCheckout = async (requestPrint = true) => {
     if (items.length === 0) {
       Alert.alert('Empty Cart', 'Add some items to build a bill.');
       return;
@@ -147,7 +167,8 @@ const PosBillingScreen = () => {
           name: item.name,
           quantity: item.quantity,
           price: item.price,
-        }))
+        })),
+        invoiceType
       );
 
       // 2. Update stock levels in local DB
@@ -161,27 +182,160 @@ const PosBillingScreen = () => {
         }
       });
 
-      // 3. Print Thermal Receipt
-      try {
-        await PrinterService.printReceipt(items, subTotal, taxAmount, grandTotal);
-      } catch (printError) {
-        console.log('Printing error:', printError);
-        Alert.alert('Print Alert', 'Invoice saved locally, but thermal printer did not reply.');
+      // 3. Handle Print/Preview
+      if (requestPrint) {
+        // Generate raw text
+        const rawReceiptText = PrinterService.generateReceiptText(
+          items, subTotal, taxAmount, grandTotal, discountAmount, settings, selectedCustomer
+        );
+        // Strip tags for UI preview
+        const cleanPreviewText = PrinterService.stripPrintTags(rawReceiptText);
+        
+        // Stage data for actual printing
+        setCurrentInvoiceData({
+          items, subTotal, taxAmount, grandTotal, discountAmount
+        });
+        setPreviewText(cleanPreviewText);
+        
+        // Hide checkout modal, show preview modal
+        setCheckoutModalVisible(false);
+        setPreviewModalVisible(true);
+      } else {
+        // Just Save
+        Alert.alert('Success', `${invoiceType} finalized successfully!`);
+        resetCheckoutState();
       }
 
-      Alert.alert('Success', `${invoiceType} finalized successfully!`);
-      
-      // Clear Cart and reset variables
-      dispatch(clearCart());
-      setSelectedCustomer(null);
-      setDiscountInput('');
-      fetchData(); // Refresh product inventory stock counts
     } catch (error) {
       console.log('Checkout failed:', error);
       Alert.alert('Checkout Failed', 'Could not complete transaction.');
+      setCheckoutLoading(false);
+    }
+  };
+
+  // --- Printer Selection Logic for Preview Modal ---
+  const requestBluetoothPermissions = async () => {
+    if (Platform.OS === 'android') {
+      try {
+        if (Platform.Version >= 31) {
+          const granted = await PermissionsAndroid.requestMultiple([
+            PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
+            PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
+            PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+          ]);
+          return (
+            granted[PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN] === PermissionsAndroid.RESULTS.GRANTED &&
+            granted[PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT] === PermissionsAndroid.RESULTS.GRANTED
+          );
+        } else {
+          const granted = await PermissionsAndroid.request(
+            PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION
+          );
+          return granted === PermissionsAndroid.RESULTS.GRANTED;
+        }
+      } catch (err) {
+        console.warn('Permission error:', err);
+        return false;
+      }
+    }
+    return true;
+  };
+
+  const handleScanPrinters = async () => {
+    const hasPermission = await requestBluetoothPermissions();
+    if (!hasPermission) {
+      Alert.alert('Permissions Denied', 'Bluetooth and Location access are required to discover printers.');
+      return;
+    }
+    try {
+      setScanning(true);
+      setShowPrinterList(true);
+      setDevices([]);
+      const deviceList = await PrinterService.scanForPrinters();
+      if (deviceList && deviceList.length > 0) {
+        setDevices(deviceList);
+      } else {
+        Alert.alert('Scan Result', 'No Bluetooth printers found nearby.');
+        setShowPrinterList(false);
+      }
+    } catch (err) {
+      console.log('Scan Error:', err);
+      Alert.alert('Scan Failed', 'Verify Bluetooth is enabled on your device.');
+      setShowPrinterList(false);
+    } finally {
+      setScanning(false);
+    }
+  };
+
+  const handleConnectPrinter = async (device) => {
+    try {
+      setScanning(true);
+      await PrinterService.connectToPrinter(device.address);
+      dispatch(
+        updateSettings({
+          connectedPrinterAddress: device.address,
+          connectedPrinterName: device.device_name || 'Thermal Printer',
+        })
+      );
+      Alert.alert('Connected', `Ready to print to ${device.device_name || 'Printer'}`);
+      setShowPrinterList(false);
+    } catch (err) {
+      Alert.alert('Connection Failed', `Could not connect to ${device.device_name}. Try restarting the printer.`);
+    } finally {
+      setScanning(false);
+    }
+  };
+
+  const executeFinalPrint = async () => {
+    if (!currentInvoiceData) return;
+    
+    if (!settings.connectedPrinterAddress) {
+       Alert.alert('Printer Required', 'Please select and connect to a printer above before printing.');
+       return;
+    }
+
+    try {
+      setCheckoutLoading(true);
+      await PrinterService.printReceipt(
+        currentInvoiceData.items, 
+        currentInvoiceData.subTotal, 
+        currentInvoiceData.taxAmount, 
+        currentInvoiceData.grandTotal, 
+        currentInvoiceData.discountAmount,
+        selectedCustomer
+      );
+      Alert.alert('Print Success', 'Receipt sent to printer.');
+      setPreviewModalVisible(false);
+      resetCheckoutState();
+    } catch (printError) {
+      console.log('Printing error:', printError);
+      if (printError.message === 'PRINTER_NOT_CONFIGURED') {
+        Alert.alert('Printer Required', 'Please connect a Bluetooth printer before printing.');
+      } else if (printError.message === 'PRINTER_CONNECTION_FAILED') {
+        Alert.alert('Print Alert', 'Could not reach thermal printer. It may be off or out of range. Reconnect using the "Select Printer" button.');
+      } else {
+         Alert.alert('Print Alert', 'An unexpected error occurred while communicating with the printer.');
+      }
     } finally {
       setCheckoutLoading(false);
     }
+  };
+
+  const closePreviewWithoutPrinting = () => {
+    Alert.alert('Success', `${invoiceType} finalized successfully (Not printed)!`);
+    setPreviewModalVisible(false);
+    resetCheckoutState();
+  };
+
+  const resetCheckoutState = () => {
+    dispatch(clearCart());
+    setSelectedCustomer(null);
+    setDiscountInput('');
+    setCheckoutModalVisible(false);
+    setCheckoutLoading(false);
+    setCurrentInvoiceData(null);
+    setShowPrinterList(false);
+    fetchData(); // Refresh product inventory stock counts
   };
 
   const filteredProducts = products.filter(p =>
@@ -243,7 +397,7 @@ const PosBillingScreen = () => {
             />
           </View>
 
-          {loading ? (
+          {loading && products.length === 0 ? (
             <View style={styles.centeredLoading}>
               <ActivityIndicator color={COLORS.primary} size="large" />
               <Text style={styles.loadingText}>Syncing stock catalogue...</Text>
@@ -253,6 +407,8 @@ const PosBillingScreen = () => {
               data={filteredProducts}
               keyExtractor={(item) => item.id.toString()}
               numColumns={isTablet ? 3 : 2}
+              refreshing={loading}
+              onRefresh={fetchData}
               renderItem={({ item }) => {
                 const qtyInCart = getCartQuantity(item.id);
                 return (
@@ -337,64 +493,199 @@ const PosBillingScreen = () => {
             }
           />
 
-          {/* Discount and Financial Summary */}
-          <View style={styles.billCalculationArea}>
-            {/* Discount Panel */}
-            <View style={styles.discountRow}>
-              <TextInput
-                style={styles.discountInput}
-                placeholder="Discount amount"
-                placeholderTextColor={COLORS.textMuted}
-                keyboardType="numeric"
-                value={discountInput}
-                onChangeText={setDiscountInput}
-              />
-              <TouchableOpacity style={styles.discountApplyBtn} onPress={handleApplyDiscount}>
-                <Text style={styles.discountApplyText}>Apply</Text>
+          {/* Checkout Trigger */}
+          <View style={styles.checkoutTriggerArea}>
+            <View style={styles.triggerRow}>
+              <Text style={styles.triggerTotalLabel}>Total Amount:</Text>
+              <Text style={styles.triggerTotalValue}>{settings.currency}{grandTotal.toFixed(2)}</Text>
+            </View>
+            <TouchableOpacity
+              style={[styles.triggerBtn, items.length === 0 && styles.disabledCheckout]}
+              onPress={() => {
+                if (items.length === 0) {
+                  Alert.alert('Empty Cart', 'Add some items to build a bill.');
+                  return;
+                }
+                setCheckoutModalVisible(true);
+              }}
+              disabled={items.length === 0}
+            >
+              <Text style={styles.triggerBtnText}>PROCEED TO CHECKOUT</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+
+      {/* Checkout Selection Modal */}
+      <Modal
+        visible={checkoutModalVisible}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setCheckoutModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Checkout & Save Bill</Text>
+              <TouchableOpacity onPress={() => setCheckoutModalVisible(false)}>
+                <Text style={styles.modalCloseIcon}>✕</Text>
               </TouchableOpacity>
             </View>
 
-            {/* Calculations Breakdown */}
-            <View style={styles.calcRow}>
-              <Text style={styles.calcLabel}>Subtotal</Text>
-              <Text style={styles.calcValue}>{settings.currency}{subTotal.toFixed(2)}</Text>
-            </View>
-            {discountAmount > 0 && (
-              <View style={styles.calcRow}>
-                <Text style={[styles.calcLabel, { color: COLORS.danger }]}>Discount</Text>
-                <Text style={[styles.calcValue, { color: COLORS.danger }]}>-{settings.currency}{discountAmount.toFixed(2)}</Text>
+            <View style={styles.billCalculationArea}>
+              {/* Customer Checkout Selection */}
+              <TouchableOpacity 
+                style={styles.checkoutCustomerBox} 
+                onPress={() => setCustomerModalVisible(true)}
+              >
+                <Text style={styles.checkoutCustomerLabel}>Selected Customer (Tap to Change):</Text>
+                <Text style={styles.checkoutCustomerValue}>
+                   {selectedCustomer ? `👤 ${selectedCustomer.name}` : '🌐 Walk-in Customer (General)'}
+                </Text>
+              </TouchableOpacity>
+
+              {/* Discount Panel */}
+              <View style={styles.discountRow}>
+                <TextInput
+                  style={styles.discountInput}
+                  placeholder="Discount %"
+                  placeholderTextColor={COLORS.textMuted}
+                  keyboardType="numeric"
+                  value={discountInput}
+                  onChangeText={setDiscountInput}
+                />
+                <TouchableOpacity style={styles.discountApplyBtn} onPress={handleApplyDiscount}>
+                  <Text style={styles.discountApplyText}>Apply</Text>
+                </TouchableOpacity>
               </View>
-            )}
-            <View style={styles.calcRow}>
-              <Text style={styles.calcLabel}>
-                {settings.taxType} ({settings.taxRate}%) {taxInclusive ? 'Incl.' : ''}
-              </Text>
-              <Text style={styles.calcValue}>{settings.currency}{taxAmount.toFixed(2)}</Text>
+
+              {/* Calculations Breakdown */}
+              <View style={styles.calcRow}>
+                <Text style={styles.calcLabel}>Subtotal</Text>
+                <Text style={styles.calcValue}>{settings.currency}{subTotal.toFixed(2)}</Text>
+              </View>
+              {discountAmount > 0 && (
+                <View style={styles.calcRow}>
+                  <Text style={[styles.calcLabel, { color: COLORS.danger }]}>Discount</Text>
+                  <Text style={[styles.calcValue, { color: COLORS.danger }]}>-{settings.currency}{discountAmount.toFixed(2)}</Text>
+                </View>
+              )}
+              <View style={styles.calcRow}>
+                <Text style={styles.calcLabel}>
+                  {settings.taxType} ({settings.taxRate}%) {taxInclusive ? 'Incl.' : ''}
+                </Text>
+                <Text style={styles.calcValue}>{settings.currency}{taxAmount.toFixed(2)}</Text>
+              </View>
+              <View style={[styles.calcRow, styles.grandTotalRow]}>
+                <Text style={styles.grandTotalLabel}>Grand Total</Text>
+                <Text style={styles.grandTotalValue}>{settings.currency}{grandTotal.toFixed(2)}</Text>
+              </View>
+
+              {/* Action Buttons */}
+              <View style={styles.checkoutActionRow}>
+                <TouchableOpacity
+                  style={[styles.checkoutBtn, styles.saveOnlyBtn, checkoutLoading && styles.disabledCheckout]}
+                  onPress={() => handleCheckout(false)}
+                  disabled={checkoutLoading}
+                >
+                  <Text style={styles.checkoutBtnText}>💾 SAVE ONLY</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.checkoutBtn, checkoutLoading && styles.disabledCheckout]}
+                  onPress={() => handleCheckout(true)}
+                  disabled={checkoutLoading}
+                >
+                  {checkoutLoading ? (
+                    <ActivityIndicator color={COLORS.textWhite} />
+                  ) : (
+                    <Text style={styles.checkoutBtnText}>
+                      {invoiceType === 'Open Invoice' ? '⚡ SAVE & PREVIEW' : '🧾 SAVE & PREVIEW'}
+                    </Text>
+                  )}
+                </TouchableOpacity>
+              </View>
             </View>
-            <View style={[styles.calcRow, styles.grandTotalRow]}>
-              <Text style={styles.grandTotalLabel}>Grand Total</Text>
-              <Text style={styles.grandTotalValue}>{settings.currency}{grandTotal.toFixed(2)}</Text>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Receipt Preview Modal */}
+      <Modal
+        visible={previewModalVisible}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={closePreviewWithoutPrinting}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Receipt Preview</Text>
+              <TouchableOpacity onPress={closePreviewWithoutPrinting}>
+                <Text style={styles.modalCloseIcon}>✕</Text>
+              </TouchableOpacity>
             </View>
 
-            {/* Action Buttons */}
-            <View style={styles.checkoutActionRow}>
-              <TouchableOpacity
-                style={[styles.checkoutBtn, checkoutLoading && styles.disabledCheckout]}
-                onPress={handleCheckout}
+            <ScrollView style={styles.previewScroll}>
+              <Text style={styles.previewTextContent}>{previewText}</Text>
+            </ScrollView>
+            
+            {/* Quick Printer Selection */}
+            <View style={styles.printerSelectionBox}>
+                {settings.connectedPrinterAddress ? (
+                  <View style={styles.connectedPrinterRow}>
+                    <Text style={styles.printerStatusPill}>🟢 {settings.connectedPrinterName || 'Printer Connected'}</Text>
+                    <TouchableOpacity onPress={handleScanPrinters} style={styles.changePrinterBtn}>
+                        <Text style={styles.changePrinterBtnText}>Change</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : (
+                   <TouchableOpacity style={styles.selectPrinterBtn} onPress={handleScanPrinters}>
+                      <Text style={styles.selectPrinterBtnText}>🔍 Select Bluetooth Printer</Text>
+                   </TouchableOpacity>
+                )}
+                
+                {showPrinterList && (
+                    <View style={styles.deviceListContainer}>
+                       {scanning && <ActivityIndicator color={COLORS.primary} size="small" style={{marginVertical: 10}} />}
+                       {!scanning && devices.map((device, index) => (
+                        <TouchableOpacity
+                          key={index}
+                          style={styles.deviceRow}
+                          onPress={() => handleConnectPrinter(device)}
+                        >
+                          <Text style={styles.deviceName}>🖨 {device.device_name || 'Generic BLE Printer'}</Text>
+                          <Text style={styles.connectPill}>Connect</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                )}
+            </View>
+
+            <View style={styles.previewActionRow}>
+              <TouchableOpacity 
+                style={[styles.checkoutBtn, styles.saveOnlyBtn]} 
+                onPress={closePreviewWithoutPrinting}
+                disabled={checkoutLoading}
+              >
+                <Text style={styles.checkoutBtnText}>Done (Don't Print)</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity 
+                style={[styles.checkoutBtn, checkoutLoading && styles.disabledCheckout]} 
+                onPress={executeFinalPrint}
                 disabled={checkoutLoading}
               >
                 {checkoutLoading ? (
                   <ActivityIndicator color={COLORS.textWhite} />
                 ) : (
-                  <Text style={styles.checkoutBtnText}>
-                    {invoiceType === 'Open Invoice' ? '⚡ ISSUE OPEN INVOICE' : '💳 PAY & PRINT RECEIPT'}
-                  </Text>
+                  <Text style={styles.checkoutBtnText}>🖨 PRINT BILL</Text>
                 )}
               </TouchableOpacity>
             </View>
           </View>
         </View>
-      </View>
+      </Modal>
 
       {/* Customer Selection Modal */}
       <Modal
@@ -414,6 +705,13 @@ const PosBillingScreen = () => {
 
             {/* List existing customers */}
             <Text style={styles.modalSubheading}>Existing Customers</Text>
+            <TextInput
+              style={styles.modalInput}
+              placeholder="🔍 Search customer..."
+              placeholderTextColor={COLORS.textMuted}
+              value={customerSearchQuery}
+              onChangeText={setCustomerSearchQuery}
+            />
             <ScrollView style={styles.customerListScroll}>
               <TouchableOpacity
                 style={[styles.customerItem, !selectedCustomer && styles.activeCustomerItem]}
@@ -426,7 +724,9 @@ const PosBillingScreen = () => {
                 <Text style={styles.customerItemPhone}>No ledger tracking</Text>
               </TouchableOpacity>
 
-              {customers.map((c) => (
+              {customers
+                .filter(c => c.name.toLowerCase().includes(customerSearchQuery.toLowerCase()) || c.phone.includes(customerSearchQuery))
+                .map((c) => (
                 <TouchableOpacity
                   key={c.id.toString()}
                   style={[styles.customerItem, selectedCustomer?.id === c.id && styles.activeCustomerItem]}
@@ -455,11 +755,28 @@ const PosBillingScreen = () => {
               />
               <TextInput
                 style={styles.modalInput}
-                placeholder="Phone Number"
+                placeholder="Phone Number *"
                 placeholderTextColor={COLORS.textMuted}
                 keyboardType="phone-pad"
                 value={newCustomerPhone}
                 onChangeText={setNewCustomerPhone}
+              />
+              <TextInput
+                style={styles.modalInput}
+                placeholder="Email Address"
+                placeholderTextColor={COLORS.textMuted}
+                keyboardType="email-address"
+                value={newCustomerEmail}
+                onChangeText={setNewCustomerEmail}
+              />
+              <TextInput
+                style={[styles.modalInput, { height: 60, textAlignVertical: 'top' }]}
+                placeholder="Billing Address (Line by Line)"
+                placeholderTextColor={COLORS.textMuted}
+                multiline={true}
+                numberOfLines={3}
+                value={newCustomerAddress}
+                onChangeText={setNewCustomerAddress}
               />
               <TouchableOpacity
                 style={[styles.modalAddBtn, addCustomerLoading && styles.disabledCheckout]}
@@ -556,7 +873,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
   },
   catalogSection: {
-    flex: 0.65,
+    flex: isTablet ? 0.65 : 0.45,
     padding: 12,
   },
   searchBarContainer: {
@@ -667,7 +984,7 @@ const styles = StyleSheet.create({
 
   // Cart summary styling
   cartSection: {
-    flex: 0.35,
+    flex: isTablet ? 0.35 : 0.55,
     backgroundColor: COLORS.lightCard,
     borderLeftWidth: 1,
     borderColor: COLORS.borderLight,
@@ -749,6 +1066,25 @@ const styles = StyleSheet.create({
     borderColor: COLORS.borderLight,
     paddingTop: 12,
   },
+  checkoutCustomerBox: {
+    backgroundColor: '#F0F9FF',
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: COLORS.primary,
+  },
+  checkoutCustomerLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: COLORS.primaryDark,
+    marginBottom: 4,
+  },
+  checkoutCustomerValue: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: COLORS.textDark,
+  },
   discountRow: {
     flexDirection: 'row',
     marginBottom: 12,
@@ -807,13 +1143,23 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     color: COLORS.success,
   },
+  checkoutActionRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 4,
+  },
   checkoutBtn: {
     backgroundColor: COLORS.success,
     borderRadius: 12,
     paddingVertical: 14,
     alignItems: 'center',
-    width: '100%',
+    flex: 1,
     ...SHADOWS.medium,
+  },
+  saveOnlyBtn: {
+    backgroundColor: COLORS.primary,
+    flex: 0.45,
+    marginRight: 8,
   },
   disabledCheckout: {
     backgroundColor: '#A7F3D0',
@@ -822,6 +1168,41 @@ const styles = StyleSheet.create({
     color: COLORS.textWhite,
     fontSize: 14,
     fontWeight: '800',
+  },
+  checkoutTriggerArea: {
+    borderTopWidth: 1.5,
+    borderColor: COLORS.borderLight,
+    paddingTop: 12,
+  },
+  triggerRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  triggerTotalLabel: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: COLORS.textDark,
+  },
+  triggerTotalValue: {
+    fontSize: 22,
+    fontWeight: '900',
+    color: COLORS.primaryDark,
+  },
+  triggerBtn: {
+    backgroundColor: COLORS.success,
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+    width: '100%',
+    ...SHADOWS.medium,
+  },
+  triggerBtnText: {
+    color: COLORS.textWhite,
+    fontSize: 14,
+    fontWeight: '800',
+    letterSpacing: 0.5,
   },
 
   // Modal styles
@@ -914,6 +1295,95 @@ const styles = StyleSheet.create({
     color: COLORS.textWhite,
     fontWeight: '700',
     fontSize: 14,
+  },
+  // Preview specific styles
+  previewScroll: {
+    backgroundColor: '#F1F5F9',
+    borderRadius: 8,
+    padding: 16,
+    maxHeight: height * 0.45,
+    marginBottom: 12,
+  },
+  previewTextContent: {
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    fontSize: 12,
+    color: COLORS.textDark,
+    lineHeight: 18,
+  },
+  previewActionRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 4,
+  },
+  printerSelectionBox: {
+    marginBottom: 16,
+    padding: 12,
+    backgroundColor: '#F8FAFC',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: COLORS.borderLight,
+  },
+  connectedPrinterRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  printerStatusPill: {
+    fontSize: 13,
+    color: COLORS.success,
+    fontWeight: '700',
+  },
+  changePrinterBtn: {
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    backgroundColor: '#E2E8F0',
+    borderRadius: 6,
+  },
+  changePrinterBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: COLORS.textDark,
+  },
+  selectPrinterBtn: {
+    backgroundColor: COLORS.darkBg,
+    paddingVertical: 10,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  selectPrinterBtnText: {
+    color: COLORS.textWhite,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  deviceListContainer: {
+    marginTop: 10,
+    borderTopWidth: 1,
+    borderColor: COLORS.borderLight,
+    paddingTop: 10,
+    maxHeight: 120,
+  },
+  deviceRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderColor: '#F1F5F9',
+  },
+  deviceName: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: COLORS.textDark,
+  },
+  connectPill: {
+    backgroundColor: COLORS.accentLight,
+    color: COLORS.accent,
+    fontSize: 10,
+    fontWeight: '800',
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 6,
+    overflow: 'hidden',
   },
 });
 

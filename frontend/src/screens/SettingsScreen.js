@@ -32,6 +32,9 @@ const SettingsScreen = () => {
   const [taxInclusive, setTaxInclusive] = useState(settings.taxInclusive);
   const [taxType, setTaxType] = useState(settings.taxType); // GST, SST, VAT, None
   const [currency, setCurrency] = useState(settings.currency);
+  const [showDiscountOnInvoice, setShowDiscountOnInvoice] = useState(settings.showDiscountOnInvoice);
+  const [listProductsSeparately, setListProductsSeparately] = useState(settings.listProductsSeparately);
+  const [showCustomerDetailsOnInvoice, setShowCustomerDetailsOnInvoice] = useState(settings.showCustomerDetailsOnInvoice ?? true);
 
   // Export Date State
   const [exportDate, setExportDate] = useState(new Date().toISOString().split('T')[0]);
@@ -53,6 +56,9 @@ const SettingsScreen = () => {
         taxInclusive,
         taxType,
         currency,
+        showDiscountOnInvoice,
+        listProductsSeparately,
+        showCustomerDetailsOnInvoice,
       })
     );
     Alert.alert('Success', 'Shop configurations saved locally and synchronized!');
@@ -237,6 +243,50 @@ const SettingsScreen = () => {
               onChangeText={setShopGstNumber}
               placeholder="e.g. GST-O3-4567"
               placeholderTextColor={COLORS.textMuted}
+            />
+          </View>
+        </View>
+
+        {/* Invoice Display Settings Card */}
+        <View style={styles.card}>
+          <Text style={styles.cardHeader}>🧾 Invoice Display Options</Text>
+          
+          <View style={[styles.rowBetween, styles.toggleContainer]}>
+            <View style={{ flex: 0.8 }}>
+              <Text style={styles.toggleLabel}>Show Discount</Text>
+              <Text style={styles.toggleDesc}>Display the discount amount applied on the receipt</Text>
+            </View>
+            <Switch
+              value={showDiscountOnInvoice}
+              onValueChange={setShowDiscountOnInvoice}
+              trackColor={{ false: '#CBD5E1', true: COLORS.primary }}
+              thumbColor={Platform.OS === 'ios' ? undefined : '#FFFFFF'}
+            />
+          </View>
+
+          <View style={[styles.rowBetween, styles.toggleContainer]}>
+            <View style={{ flex: 0.8 }}>
+              <Text style={styles.toggleLabel}>List Products Separately</Text>
+              <Text style={styles.toggleDesc}>Print each product on a new line instead of grouping by quantity</Text>
+            </View>
+            <Switch
+              value={listProductsSeparately}
+              onValueChange={setListProductsSeparately}
+              trackColor={{ false: '#CBD5E1', true: COLORS.primary }}
+              thumbColor={listProductsSeparately ? COLORS.textWhite : '#f4f3f4'}
+            />
+          </View>
+
+          <View style={[styles.rowBetween, styles.toggleContainer]}>
+            <View style={{ flex: 0.8 }}>
+              <Text style={styles.toggleLabel}>Show Customer Details</Text>
+              <Text style={styles.toggleDesc}>Print customer name, phone, email, and address on the receipt</Text>
+            </View>
+            <Switch
+              value={showCustomerDetailsOnInvoice}
+              onValueChange={setShowCustomerDetailsOnInvoice}
+              trackColor={{ false: '#CBD5E1', true: COLORS.primary }}
+              thumbColor={showCustomerDetailsOnInvoice ? COLORS.textWhite : '#f4f3f4'}
             />
           </View>
         </View>

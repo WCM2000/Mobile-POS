@@ -96,12 +96,14 @@ const InventoryScreen = () => {
         onChangeText={setSearchQuery}
       />
 
-      {loading ? (
+      {loading && products.length === 0 ? (
         <ActivityIndicator size="large" color={COLORS.primary} style={{ marginTop: 50 }} />
       ) : (
         <FlatList
           data={filteredProducts}
           keyExtractor={(item) => item.id.toString()}
+          refreshing={loading}
+          onRefresh={fetchProducts}
           renderItem={({ item }) => (
             <View style={styles.productCard}>
               <View>
