@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState, useCallback } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import {
   View,
   Text,
@@ -45,10 +46,14 @@ const ManagementScreen = () => {
   // Form Fields - Customer
   const [custName, setCustName] = useState('');
   const [custPhone, setCustPhone] = useState('');
+  const [custEmail, setCustEmail] = useState('');
+  const [custAddress, setCustAddress] = useState('');
 
-  useEffect(() => {
-    fetchData();
-  }, []);
+  useFocusEffect(
+    useCallback(() => {
+      fetchData();
+    }, [])
+  );
 
   const fetchData = async () => {
     try {
@@ -147,13 +152,17 @@ const ManagementScreen = () => {
     setEditingCustomer(null);
     setCustName('');
     setCustPhone('');
+    setCustEmail('');
+    setCustAddress('');
     setCustomerModalVisible(true);
   };
 
   const handleOpenCustomerEdit = (cust) => {
     setEditingCustomer(cust);
     setCustName(cust.name);
-    setCustPhone(cust.phone);
+    setCustPhone(cust.phone || '');
+    setCustEmail(cust.email || '');
+    setCustAddress(cust.address || '');
     setCustomerModalVisible(true);
   };
 
@@ -168,14 +177,14 @@ const ManagementScreen = () => {
       const db = getDb();
       if (editingCustomer) {
         await db.runAsync(
-          'UPDATE customers SET name = ?, phone = ? WHERE id = ?',
-          [custName, custPhone, editingCustomer.id]
+          'UPDATE customers SET name = ?, phone = ?, email = ?, address = ? WHERE id = ?',
+          [custName, custPhone, custEmail, custAddress, editingCustomer.id]
         );
         Alert.alert('Success', 'Customer profile updated.');
       } else {
         await db.runAsync(
-          'INSERT INTO customers (name, phone) VALUES (?, ?)',
-          [custName, custPhone]
+          'INSERT INTO customers (name, phone, email, address) VALUES (?, ?, ?, ?)',
+          [custName, custPhone, custEmail, custAddress]
         );
         Alert.alert('Success', 'Customer registered successfully.');
       }
@@ -355,6 +364,8 @@ const ManagementScreen = () => {
                 <View style={styles.cardInfoCol}>
                   <Text style={styles.cardName}>👤 {item.name}</Text>
                   <Text style={styles.custPhone}>📞 {item.phone}</Text>
+                  {item.email ? <Text style={styles.custPhone}>✉️ {item.email}</Text> : null}
+                  {item.address ? <Text style={styles.custPhone}>🏠 {item.address}</Text> : null}
                 </View>
 
                 {/* CRUD Action Buttons */}
@@ -488,6 +499,31 @@ const ManagementScreen = () => {
                   keyboardType="phone-pad"
                   value={custPhone}
                   onChangeText={setCustPhone}
+                />
+              </View>
+
+              <View style={styles.modalInputGroup}>
+                <Text style={styles.modalLabel}>Email Address</Text>
+                <TextInput
+                  style={styles.modalInput}
+                  placeholder="e.g. customer@example.com"
+                  placeholderTextColor={COLORS.textMuted}
+                  keyboardType="email-address"
+                  value={custEmail}
+                  onChangeText={setCustEmail}
+                />
+              </View>
+
+              <View style={styles.modalInputGroup}>
+                <Text style={styles.modalLabel}>Billing Address (Line by Line)</Text>
+                <TextInput
+                  style={[styles.modalInput, { height: 80, textAlignVertical: 'top' }]}
+                  placeholder="e.g. No. 123&#10;Main Street&#10;Colombo 07"
+                  placeholderTextColor={COLORS.textMuted}
+                  multiline={true}
+                  numberOfLines={4}
+                  value={custAddress}
+                  onChangeText={setCustAddress}
                 />
               </View>
 

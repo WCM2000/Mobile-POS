@@ -24,7 +24,8 @@ export const initDatabase = async () => {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
         phone TEXT,
-        address TEXT
+        address TEXT,
+        email TEXT
       );
     `);
 
@@ -36,9 +37,24 @@ export const initDatabase = async () => {
         total_amount REAL NOT NULL,
         discount REAL DEFAULT 0,
         date TEXT NOT NULL,
-        items TEXT NOT NULL -- JSON string of items
+        items TEXT NOT NULL, -- JSON string of items
+        invoice_type TEXT DEFAULT 'Cash Bill'
       );
     `);
+
+    // Migration to add invoice_type column if upgrading
+    try {
+      await db.execAsync(`ALTER TABLE invoices ADD COLUMN invoice_type TEXT DEFAULT 'Cash Bill';`);
+    } catch (e) {
+      // Column already exists, ignore
+    }
+
+    // Migration to add email column if upgrading
+    try {
+      await db.execAsync(`ALTER TABLE customers ADD COLUMN email TEXT;`);
+    } catch (e) {
+      // Column already exists, ignore
+    }
 
     console.log('Database initialized successfully');
   } catch (error) {
@@ -62,12 +78,12 @@ export const getProductsLocal = async () => {
 };
 
 // Invoice Operations
-export const addInvoiceLocal = async (customerName, totalAmount, discount, items) => {
+export const addInvoiceLocal = async (customerName, totalAmount, discount, items, invoiceType = 'Cash Bill') => {
   const date = new Date().toISOString();
   const itemsJson = JSON.stringify(items);
   return await db.runAsync(
-    'INSERT INTO invoices (customer_name, total_amount, discount, date, items) VALUES (?, ?, ?, ?, ?)',
-    [customerName, totalAmount, discount, date, itemsJson]
+    'INSERT INTO invoices (customer_name, total_amount, discount, date, items, invoice_type) VALUES (?, ?, ?, ?, ?, ?)',
+    [customerName, totalAmount, discount, date, itemsJson, invoiceType]
   );
 };
 
